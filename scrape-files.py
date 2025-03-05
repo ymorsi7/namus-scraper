@@ -1,4 +1,5 @@
 import os, re, json, grequests, functools, mimetypes
+import argparse
 
 REQUEST_BATCH_SIZE = 10
 REQUEST_FEEDBACK_INTERVAL = 50
@@ -13,11 +14,24 @@ CASE_TYPES = ["MissingPersons", "UnidentifiedPersons", "UnclaimedPersons"]
 KNOWN_EXTENSIONS = {"image/jpg": ".jpg", "image/pjpeg": ".jpg", "image/x-png": ".png"}
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Download files for NamUs cases')
+    parser.add_argument('--limit', type=int, help='Limit the number of cases to process')
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+    
     for caseType in CASE_TYPES:
         print("Collecting: {type}".format(type=caseType))
 
         cases = json.loads(open(DATA_INPUT.format(type=caseType), "r").read())
+        
+        if args.limit:
+            cases = cases[:args.limit]
+            print(f" > Limited to {args.limit} cases")
+            
         print(" > Found %d cases" % len(cases))
 
         files = functools.reduce(

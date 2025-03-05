@@ -1,4 +1,5 @@
 import os, json, grequests, requests, functools
+import argparse
 
 SEARCH_LIMIT = 10000
 REQUEST_BATCH_SIZE = 50
@@ -19,8 +20,13 @@ CASE_TYPES = {
 
 completedCases = 0
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Scrape NamUs case data')
+    parser.add_argument('--limit', type=int, help='Limit the number of cases to process')
+    return parser.parse_args()
 
 def main():
+    args = parse_args()
     print("Fetching states\n")
     states = requests.get(STATE_ENDPOINT, headers={"User-Agent": USER_AGENT}).json()
 
@@ -58,6 +64,10 @@ def main():
             searchRequests,
             [],
         )
+
+        if args.limit:
+            cases = cases[:args.limit]
+            print(f" > Limited to {args.limit} cases")
 
         print(" > Found %d cases" % len(cases))
 

@@ -2,6 +2,7 @@ import os, pickle, face_recognition
 from glob import glob
 from functools import reduce
 from PIL import Image
+import argparse
 
 PROCESS_FEEDBACK_INTERVAL = 50
 
@@ -19,13 +20,24 @@ CASE_TYPES = {
     }
 }
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Process faces from NamUs case images')
+    parser.add_argument('--limit', type=int, help='Limit the number of images to process')
+    return parser.parse_args()
 
 def main():
+    args = parse_args()
+    
     for caseType in CASE_TYPES:
         print("Processing: {type}".format(type=caseType))
 
         print(" > Fetching image file paths")
         paths = getImageFilesForType(caseType)
+        
+        if args.limit:
+            paths = paths[:args.limit]
+            print(f" > Limited to {args.limit} images")
+            
         print(" > Found %d files" % len(paths))
 
         os.makedirs(
