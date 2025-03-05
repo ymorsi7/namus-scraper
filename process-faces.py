@@ -1,131 +1,114 @@
-import os, pickle, face_recognition
-from glob import glob
-from functools import reduce
+import os, re, glob, face_recognition
 from PIL import Image
 import argparse
-import re
 
-PROCESS_FEEDBACK_INTERVAL = 50
-
-FILE_LOCATIONS = "./output/{type}/files/*/"
-IMAGE_EXTENSIONS = ["jpg", "jpeg", "png"]
-
-FACES_DATA = "./output/{type}/FaceEncodings.dat"
-FACES_OUTPUT = "./output/{type}/faces/{case_id}-{category}-face{index}.{extension}"
-CASE_TYPES = {
-    "MissingPersons": {
-        "excluded": []
-    },
-    "UnidentifiedPersons": {
-        "excluded": ["/Clothing/", "/Footwear/", "/OfficeLogo/"]
-    }
-}
+# Folder locations
+OUTPUT_BASE = "./output"
+FACES_OUTPUT = "./output/faces/namus{namus_id}-face{index}.{extension}"
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Process faces from NamUs case images')
+    parser = argparse.ArgumentParser(description='Direct face extraction from NamUs images')
     parser.add_argument('--limit', type=int, help='Limit the number of images to process')
+    parser.add_argument('--input', default=None, help='Specific input folder to process')
     return parser.parse_args()
+
+def extract_namus_id(filepath):
+    """Extract the NamUs ID from the file path or name"""
+    # Try to find a number in the path that looks like a NamUs ID
+    match = re.search(r'/(\d+)[/-]', filepath)
+    if match:
+        return match.group(1)
+    
+    # Try filename
+    filename = os.path.basename(filepath)
+    match = re.search(r'(\d+)', filename)
+    if match:
+        return match.group(1)
+    
+    return "unknown"
 
 def main():
     args = parse_args()
     
-    for caseType in CASE_TYPES:
-        print("Processing: {type}".format(type=caseType))
-
-        print(" > Fetching image file paths")
-        paths = getImageFilesForType(caseType)
+    # Create output directory
+    faces_dir = os.path.join(OUTPUT_BASE, "faces")
+    os.makedirs(faces_dir, exist_ok=True)
+    
+    # Find all images in the output directory
+    if args.input:
+        search_path = args.input
+    else:
+        search_path = OUTPUT_BASE
         
-        if args.limit:
-            paths = paths[:args.limit]
-            print(f" > Limited to {args.limit} images")
+    print(f"Searching for images in: {search_path}")
+    image_paths = []
+    for ext in ['jpg', 'jpeg', 'png']:
+        image_paths.extend(glob.glob(f"{search_path}/**/*.{ext}", recursive=True))
+    
+    print(f"Found {len(image_paths)} images")
+    
+    if args.limit:
+        image_paths = image_paths[:args.limit]
+        print(f"Limited to {args.limit} images")
+    
+    processed = 0
+    faces_found = 0
+    skipped = 0
+    errors = 0
+    
+    for path in image_paths:
+        try:
+            namus_id = extract_namus_id(path)
+            if namus_id == "unknown":
+                print(f"Warning: Could not extract NamUs ID from {path}")
             
-        print(" > Found %d files" % len(paths))
-
-        # Create parent directory for faces
-        base_faces_dir = os.path.dirname(
-            FACES_OUTPUT.format(type=caseType, case_id="*", category="*", index="*", extension="*")
-        )
-        os.makedirs(base_faces_dir, exist_ok=True)
-        
-        dataFile = open(FACES_DATA.format(type=caseType), 'wb')
-
-        print(" > Starting face extraction")
-        processedFiles, facesFound = 0, 0
-        for path in paths:
-            try:
-                # Extract case ID and category from the path
-                # Expected format: .../output/{type}/files/{category}/{case}-{file}.{extension}
-                path_parts = path.split('/')
+            print(f"Processing image: {path} (NamUs ID: {namus_id})")
+            
+            # Extract faces
+            image = face_recognition.load_image_file(path)
+            face_locations = face_recognition.face_locations(image)
+            
+            print(f"  Found {len(face_locations)} faces")
+            
+            # Save each face
+            for i, face_location in enumerate(face_locations):
+                top, right, bottom, left = face_location
+                face_image = image[top:bottom, left:right]
+                pil_image = Image.fromarray(face_image)
                 
-                # Get file components
-                category = "unknown"
-                case_id = "unknown"
+                extension = os.path.splitext(path)[1][1:].lower()
+                if extension not in ['jpg', 'jpeg', 'png']:
+                    extension = 'jpg'
                 
-                # Look for category (which is folder name above the file)
-                if len(path_parts) >= 2:
-                    category = path_parts[-2]
+                output_path = FACES_OUTPUT.format(
+                    namus_id=namus_id,
+                    index=i,
+                    extension=extension
+                )
                 
-                # Extract case ID from filename pattern
-                filename = path_parts[-1]
-                case_id_match = re.match(r'^([^-]+)-', filename)
-                if case_id_match:
-                    case_id = case_id_match.group(1)
+                # Skip if face already exists
+                if os.path.exists(output_path):
+                    print(f"  Skip face {i+1} (already exists): {output_path}")
+                    skipped += 1
+                    continue
                 
-                # Extract filename and extension
-                pathParts = filename.split(".")
-                fileName = pathParts[0] if len(pathParts) > 0 else "unknown"
-                extension = pathParts[1] if len(pathParts) > 1 else "jpg"
+                pil_image.save(output_path)
+                print(f"  Saved face {i+1}: {output_path}")
+                faces_found += 1
+            
+            processed += 1
+            if processed % 10 == 0:
+                print(f"Progress: {processed} images processed, {faces_found} faces extracted")
+                
+        except Exception as e:
+            print(f"Error processing {path}: {str(e)}")
+            errors += 1
+    
+    print("\nSummary:")
+    print(f"Images processed: {processed}")
+    print(f"Faces extracted: {faces_found}")
+    print(f"Faces skipped (duplicates): {skipped}")
+    print(f"Errors: {errors}")
 
-                image = face_recognition.load_image_file(path)
-                locations = face_recognition.face_locations(image)
-                encodings = face_recognition.face_encodings(image, locations)
-
-                if len(encodings):
-                    pickle.dump({path: encodings}, dataFile)
-
-                for index, location in enumerate(locations):
-                    outputPath = FACES_OUTPUT.format(
-                        type=caseType, 
-                        case_id=case_id,
-                        category=category,
-                        index=index,
-                        extension=extension
-                    )
-                    
-                    # Skip if file already exists
-                    if os.path.exists(outputPath):
-                        continue
-                        
-                    top, right, bottom, left = location
-                    face = Image.fromarray(image[top:bottom, left:right])
-                    face.save(outputPath)
-                    facesFound += 1
-
-                processedFiles += 1
-                if processedFiles % PROCESS_FEEDBACK_INTERVAL == 0:
-                    print(
-                        " > Processed {count} files with {faces} faces".format(
-                            count=processedFiles, faces=facesFound
-                        )
-                    )
-            except Exception as e:
-                processedFiles += 1
-                print(f" > Failed parsing path: {path}. Error: {str(e)}")
-
-        dataFile.close()
-
-
-def getImageFilesForType(caseType):
-    imageExtensionPaths = [
-        FILE_LOCATIONS.format(type=caseType) + "*." + extension
-        for extension in IMAGE_EXTENSIONS
-    ]
-
-    filePaths = reduce(lambda output, path: output + glob(path), imageExtensionPaths, [])
-    for excluded in CASE_TYPES[caseType]["excluded"]:
-        filePaths = list(filter(lambda path: excluded not in path, filePaths))
-
-    return list(filePaths)
-
-
-main()
+if __name__ == "__main__":
+    main()
